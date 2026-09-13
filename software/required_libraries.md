@@ -1,6 +1,6 @@
-# SO-101 Setup on DGX: LeRobot Stack + FSR Grip-Force Logging
+# SO-100 Setup on DGX: LeRobot Stack + FSR Grip-Force Logging
 
-Everything needed to (a) run a leader + follower SO-101 pair under LeRobot on an
+Everything needed to (a) run a leader + follower SO-100 pair under LeRobot on an
 NVIDIA DGX, and (b) read calibrated grip force off an FSR taped to the gripper jaw.
 
 Target platform: **DGX OS / Ubuntu, NVIDIA GPU**. Commands verified against the
@@ -149,7 +149,7 @@ pip install -e ".[core_scripts,feetech,training]"
 
 | Extra | Adds | Why |
 |---|---|---|
-| `feetech` | Feetech STS3215 SDK | **Mandatory.** Without it the SO-101 will not talk. |
+| `feetech` | Feetech STS3215 SDK | **Mandatory.** Without it the SO-100 will not talk. |
 | `core_scripts` | `dataset` + `hardware` + `viz` | `lerobot-record`, `-replay`, `-calibrate` |
 | `training` | `dataset` + `accelerate`, `wandb` | **The reason you have a DGX.** |
 | `dataset` | `datasets`, `av`, `torchcodec`, `jsonlines` | dataset create/load |
@@ -230,9 +230,9 @@ udevadm info -a -n /dev/ttyACM0 | grep -E 'ATTRS\{(serial|idVendor|idProduct)\}|
 **If the adapters report unique serials** (preferred), match on serial:
 
 ```bash
-sudo tee /etc/udev/rules.d/99-so101.rules >/dev/null <<'EOF'
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="SERIAL_A", SYMLINK+="so101_follower"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="SERIAL_B", SYMLINK+="so101_leader"
+sudo tee /etc/udev/rules.d/99-so100.rules >/dev/null <<'EOF'
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="SERIAL_A", SYMLINK+="so100_follower"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{serial}=="SERIAL_B", SYMLINK+="so100_leader"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="2886", SYMLINK+="fsr_mcu"
 EOF
 sudo udevadm control --reload-rules && sudo udevadm trigger
@@ -242,14 +242,14 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 physical USB port instead, and always plug each arm into the same socket:
 
 ```bash
-SUBSYSTEM=="tty", KERNELS=="1-3.1:1.0", SYMLINK+="so101_follower"
-SUBSYSTEM=="tty", KERNELS=="1-3.2:1.0", SYMLINK+="so101_leader"
+SUBSYSTEM=="tty", KERNELS=="1-3.1:1.0", SYMLINK+="so100_follower"
+SUBSYSTEM=="tty", KERNELS=="1-3.2:1.0", SYMLINK+="so100_leader"
 ```
 
 Then use the stable names everywhere:
 ```bash
-FOLLOWER_PORT=/dev/so101_follower
-LEADER_PORT=/dev/so101_leader
+FOLLOWER_PORT=/dev/so100_follower
+LEADER_PORT=/dev/so100_leader
 FSR_PORT=/dev/fsr_mcu
 ```
 
@@ -270,35 +270,38 @@ Run once per arm, unplugging the one being identified when prompted.
 The `id` you assign becomes the calibration filename. **Keep it identical across
 setup, calibrate, teleoperate, record, and rollout.**
 
-## 3.1 Set motor IDs — once per motor, before assembly
+## 3.1 Set motor IDs — once per motor, BEFORE assembly
+
+> **SO-100 only, and it matters.** LeRobot's docs are explicit: *"Unlike the
+> SO-101, the motor connectors are not easily accessible once the arm is
+> assembled, so the configuration step must be done beforehand."* If you
+> assemble first you will be taking the arm apart again. Do §3.1 with loose
+> motors on the bench.
 
 Writes to motor EEPROM. Connect **one motor at a time**, not daisy-chained.
 
 ```bash
-lerobot-setup-motors --robot.type=so101_follower --robot.port=$FOLLOWER_PORT
-lerobot-setup-motors --teleop.type=so101_leader  --teleop.port=$LEADER_PORT
+lerobot-setup-motors --robot.type=so100_follower --robot.port=$FOLLOWER_PORT
+lerobot-setup-motors --teleop.type=so100_leader  --teleop.port=$LEADER_PORT
 ```
 
 The script walks backwards from `gripper` (id 6) to `shoulder_pan` (id 1).
 
-**Leader gearing differs per joint** — don't mix these up:
+**All 12 servos are the same part.** Unlike the SO-101, the SO-100 uses one
+STS3215 variant throughout — there is no per-joint gearing to keep straight.
 
-| Leader axis | Motor | Gear ratio |
-|---|:--:|:--:|
-| Shoulder pan | 1 | 1/191 |
-| Shoulder lift | 2 | 1/345 |
-| Elbow flex | 3 | 1/191 |
-| Wrist flex | 4 | 1/147 |
-| Wrist roll | 5 | 1/147 |
-| Gripper | 6 | 1/147 |
-
-The follower is 6× 1/345 throughout.
+**The leader's 6 motors need their gears removed.** That converts them into
+position encoders with almost no friction, which is what makes the leader
+back-driveable by hand. See the gear-removal video in the
+[SO-100 assembly guide](https://huggingface.co/docs/lerobot/so100). Do this
+before assembling the leader; a geared leader is stiff and unpleasant to
+teleoperate.
 
 ## 3.2 Calibrate both arms
 
 ```bash
-lerobot-calibrate --robot.type=so101_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower
-lerobot-calibrate --teleop.type=so101_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader
+lerobot-calibrate --robot.type=so100_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower
+lerobot-calibrate --teleop.type=so100_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader
 ```
 
 Move to mid-range on all joints, press Enter, then sweep each joint end to end.
@@ -326,16 +329,16 @@ teleop — which is what you have — is unaffected by all of this.
 
 ```bash
 lerobot-teleoperate \
-    --robot.type=so101_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
-    --teleop.type=so101_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader
+    --robot.type=so100_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
+    --teleop.type=so100_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader
 ```
 
 With cameras + live view (needs a display or forwarded rerun viewer):
 ```bash
 lerobot-teleoperate \
-    --robot.type=so101_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
+    --robot.type=so100_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
     --robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 640, height: 480, fps: 30}}" \
-    --teleop.type=so101_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader \
+    --teleop.type=so100_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader \
     --display_data=true
 ```
 
@@ -351,9 +354,9 @@ hf auth login --token ${HUGGINGFACE_TOKEN} --add-to-git-credential
 HF_USER=$(NO_COLOR=1 hf auth whoami | awk -F': *' 'NR==1 {print $2}')
 
 lerobot-record \
-    --robot.type=so101_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
+    --robot.type=so100_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
     --robot.cameras="{ front: {type: opencv, index_or_path: 0, width: 1920, height: 1080, fps: 30}}" \
-    --teleop.type=so101_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader \
+    --teleop.type=so100_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader \
     --dataset.repo_id=${HF_USER}/record-test \
     --dataset.num_episodes=5 \
     --dataset.single_task="Grab the black cube"
@@ -388,8 +391,8 @@ This is what the machine is for. Locally, not on HF Jobs.
 lerobot-train \
   --dataset.repo_id=${HF_USER}/record-test \
   --policy.type=act \
-  --output_dir=outputs/train/act_so101 \
-  --job_name=act_so101 \
+  --output_dir=outputs/train/act_so100 \
+  --job_name=act_so100 \
   --policy.device=cuda \
   --wandb.enable=true \
   --policy.repo_id=${HF_USER}/my_policy
@@ -397,7 +400,7 @@ lerobot-train \
 
 Resume from a checkpoint:
 ```bash
-lerobot-train --config_path=outputs/train/act_so101/checkpoints/last/pretrained_model/train_config.json --resume=true
+lerobot-train --config_path=outputs/train/act_so100/checkpoints/last/pretrained_model/train_config.json --resume=true
 ```
 
 Weights & Biases (in the `training` extra):
@@ -418,7 +421,7 @@ Deploy the trained policy back to the robot-connected machine:
 lerobot-rollout \
   --strategy.type=base \
   --policy.path=${HF_USER}/my_policy \
-  --robot.type=so101_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
+  --robot.type=so100_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
   --task="Grab the black cube" --duration=60
 ```
 
@@ -450,9 +453,11 @@ pad pressing on it gives noise, not force. Tape a hard disc *slightly smaller*
 than the sensing area on top so load lands uniformly. This is the single biggest
 determinant of whether the readings mean anything.
 
-**Don't mount on the compliant TPU jaw.** FSRs respond to substrate bending as if
-it were force. `Optional/Compliant_Gripper` is designed to deform, so it reads
-its own flex. Characterise the rigid PLA `Moving_Jaw_SO101`.
+**Mount on a rigid jaw.** FSRs respond to substrate bending as if it were force,
+so anything that flexes under load reads its own deformation. The stock SO-100
+jaw is rigid PLA, which is what you want. (The upstream compliant TPU gripper is
+an SO-101 part and has no SO-100 variant — if you ever port it over, do not put
+an FSR on it.)
 
 Also: exercise the sensor 10–20 times before trusting it, and let each reading
 settle ~2 s — FSRs creep under constant load.
@@ -665,7 +670,7 @@ else in this section still applies.
 ## 5.8 Getting force into a LeRobot dataset
 
 LeRobot has no FSR support. To record force alongside joint states you subclass
-`SO101Follower`, add a key to `observation_features`, and merge the serial read
+`SO100Follower`, add a key to `observation_features`, and merge the serial read
 into `get_observation()`. Requires the **source install** from §1.5.
 
 Not needed for bench characterisation (§5.9).
@@ -692,17 +697,17 @@ attached to the robot — and the FSR comes off.
 ```bash
 source .venv/bin/activate               # or: conda activate lerobot
 
-FOLLOWER_PORT=/dev/so101_follower
-LEADER_PORT=/dev/so101_leader
+FOLLOWER_PORT=/dev/so100_follower
+LEADER_PORT=/dev/so100_leader
 FSR_PORT=/dev/fsr_mcu
 
 lerobot-find-port
-lerobot-setup-motors --robot.type=so101_follower --robot.port=$FOLLOWER_PORT
-lerobot-calibrate    --robot.type=so101_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower
-lerobot-teleoperate  --robot.type=so101_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
-                     --teleop.type=so101_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader
+lerobot-setup-motors --robot.type=so100_follower --robot.port=$FOLLOWER_PORT
+lerobot-calibrate    --robot.type=so100_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower
+lerobot-teleoperate  --robot.type=so100_follower --robot.port=$FOLLOWER_PORT --robot.id=my_follower \
+                     --teleop.type=so100_leader  --teleop.port=$LEADER_PORT  --teleop.id=my_leader
 lerobot-train        --dataset.repo_id=${HF_USER}/record-test --policy.type=act \
-                     --output_dir=outputs/train/act_so101 --job_name=act_so101 --policy.device=cuda
+                     --output_dir=outputs/train/act_so100 --job_name=act_so100 --policy.device=cuda
 
 python fsr_log.py --port $FSR_PORT --out grip_test.csv
 ```
@@ -720,7 +725,7 @@ python fsr_log.py --port $FSR_PORT --out grip_test.csv
 ## References
 
 - [LeRobot installation](https://huggingface.co/docs/lerobot/installation)
-- [SO-101 setup](https://huggingface.co/docs/lerobot/so101)
+- [SO-100 setup](https://huggingface.co/docs/lerobot/so100)
 - [Imitation learning on real robots](https://huggingface.co/docs/lerobot/il_robots)
 - [arduino-cli](https://arduino.github.io/arduino-cli/)
 - [Interlink FSR 402](https://www.interlinkelectronics.com/fsr-402)
